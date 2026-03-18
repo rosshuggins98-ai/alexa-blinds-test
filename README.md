@@ -30,7 +30,38 @@ pip install bleak
 
 ---
 
-## Usage
+## Desktop GUI App (recommended)
+
+The easiest way to use the tool is the graphical desktop app:
+
+```bash
+python app.py
+```
+
+> **Requires tkinter** — bundled with Python on Windows and macOS.
+> On Ubuntu/Debian Linux: `sudo apt install python3-tk`
+
+The app has four tabs:
+
+| Tab | What it does |
+|---|---|
+| **Scan** | Discover nearby BLE devices (filter by name, set timeout) |
+| **Services** | View all GATT services and characteristics after connecting |
+| **Listen** | Subscribe to BLE notifications and log incoming data in hex |
+| **Send** | Write raw hex bytes to any characteristic |
+
+### Quick start
+
+1. Click **Scan** — devices appear in the list.
+2. Double-click a device (or select it and click **Select Device →**).
+3. Click **Connect** in the top bar.
+4. Switch to **Services** to explore the GATT profile.
+5. Switch to **Listen**, click **Start Listening**, then use the Tuiss app to capture commands.
+6. Switch to **Send**, pick a write characteristic, enter hex bytes, and click **Send**.
+
+---
+
+## Command-Line Interface
 
 ```
 python cli.py [-v] <command> [options]
@@ -80,6 +111,7 @@ python cli.py -v scan
 
 ```
 .
+├── app.py          # Desktop GUI (tkinter) — launch with: python app.py
 ├── cli.py          # CLI entry point
 ├── scanner.py      # BLE scanner (scan & filter devices)
 ├── client.py       # BLE client (connect, services, notify, send)
