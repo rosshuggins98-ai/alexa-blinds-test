@@ -359,7 +359,8 @@ class ScanTab(ttk.Frame):
             self._qr_pairing_code = None
             self._qr_status_var.set(f"✓ Device MAC: {mac}")
             self._app.set_status(f"QR scan successful — device MAC: {mac}")
-            self._auto_select_qr_device()
+            if not self._auto_select_qr_device():
+                self._start_scan()
             return
 
         code = parse_pairing_code(data)
@@ -367,9 +368,10 @@ class ScanTab(ttk.Frame):
             self._qr_mac = None
             self._qr_pairing_code = code
             self._qr_status_var.set(
-                f"✓ Pairing code: {code}  — scan BLE devices to find your blind")
+                f"✓ Pairing code: {code}")
             self._app.set_status(f"QR scan successful — pairing code: {code}")
-            self._auto_select_by_pairing_code()
+            if not self._auto_select_by_pairing_code():
+                self._start_scan()
             return
 
         # Fallback — show whatever we got
@@ -396,7 +398,8 @@ class ScanTab(ttk.Frame):
             self._qr_pairing_code = None
             self._qr_status_var.set(f"✓ Device MAC: {mac}")
             self._app.set_status(f"Manual entry — device MAC: {mac}")
-            self._auto_select_qr_device()
+            if not self._auto_select_qr_device():
+                self._start_scan()
             return
 
         code = parse_pairing_code(raw)
@@ -404,9 +407,10 @@ class ScanTab(ttk.Frame):
             self._qr_mac = None
             self._qr_pairing_code = code
             self._qr_status_var.set(
-                f"✓ Pairing code: {code}  — scan BLE devices to find your blind")
+                f"✓ Pairing code: {code}")
             self._app.set_status(f"Manual entry — pairing code: {code}")
-            self._auto_select_by_pairing_code()
+            if not self._auto_select_by_pairing_code():
+                self._start_scan()
             return
 
         # Accept any even-length hex string the user types
@@ -416,9 +420,10 @@ class ScanTab(ttk.Frame):
             self._qr_mac = None
             self._qr_pairing_code = cleaned
             self._qr_status_var.set(
-                f"✓ Pairing code: {cleaned}  — scan BLE devices to find your blind")
+                f"✓ Pairing code: {cleaned}")
             self._app.set_status(f"Manual entry — pairing code: {cleaned}")
-            self._auto_select_by_pairing_code()
+            if not self._auto_select_by_pairing_code():
+                self._start_scan()
             return
 
         messagebox.showwarning(
@@ -427,10 +432,13 @@ class ScanTab(ttk.Frame):
             "a MAC address (e.g. AA:BB:CC:DD:EE:FF)."
         )
 
-    def _auto_select_qr_device(self) -> None:
-        """If a QR MAC was scanned, try to select the matching device."""
+    def _auto_select_qr_device(self) -> bool:
+        """If a QR MAC was scanned, try to select the matching device.
+
+        Returns ``True`` if a matching device was found and selected.
+        """
         if not self._qr_mac:
-            return
+            return False
         mac_upper = self._qr_mac.upper()
         for device in self._app._scanned_devices:
             if device.address.upper() == mac_upper:
@@ -440,16 +448,19 @@ class ScanTab(ttk.Frame):
                 self._app._select_device(device)
                 self._app.set_status(
                     f"Auto-selected device matching QR code: {device.name or device.address}")
-                return
+                return True
+        return False
 
-    def _auto_select_by_pairing_code(self) -> None:
+    def _auto_select_by_pairing_code(self) -> bool:
         """If a QR pairing code was scanned, try to find a matching device.
 
         Checks both device names and MAC addresses for the pairing code
         substring (case-insensitive).  Tags matching rows in the tree.
+
+        Returns ``True`` if at least one matching device was found.
         """
         if not self._qr_pairing_code:
-            return
+            return False
         code_upper = self._qr_pairing_code.upper()
         matches: list[BLEDevice] = []
         for device in self._app._scanned_devices:
@@ -472,11 +483,13 @@ class ScanTab(ttk.Frame):
             self._app.set_status(
                 f"Found {len(matches)} device(s) matching pairing code "
                 f"{self._qr_pairing_code}: {first.name or first.address}")
+            return True
         else:
             if self._app._scanned_devices:
                 self._app.set_status(
                     f"No device found matching pairing code "
                     f"{self._qr_pairing_code} — try scanning again")
+            return False
 
     # -- BLE scanning ------------------------------------------------
 
