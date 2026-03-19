@@ -297,7 +297,9 @@ class ScanTab(ttk.Frame):
         vsb.pack(side=tk.LEFT, fill=tk.Y)
 
         # Ensure ttk theme does not override tag background colours (e.g.
-        # the green highlight for pairing-code matches).
+        # the green highlight for pairing-code matches).  Passing an empty
+        # list clears the theme's default state-based background mappings,
+        # allowing per-row tag_configure colours to take precedence.
         style = ttk.Style()
         style.map("Treeview", background=[])
 

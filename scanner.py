@@ -34,7 +34,7 @@ class ScannedDevice:
         return self.device.address
 
     @property
-    def rssi(self):
+    def rssi(self) -> Optional[int]:
         return getattr(self.device, "rssi", None)
 
 
