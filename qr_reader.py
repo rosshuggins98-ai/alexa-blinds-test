@@ -27,6 +27,13 @@ _HAS_WECHAT_QR = hasattr(cv2, "wechat_qrcode")
 # Regex pattern for BLE MAC addresses (e.g. AA:BB:CC:DD:EE:FF)
 _MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}")
 
+# Pre-computed gamma lookup tables (avoids recalculating on every call).
+_GAMMA_TABLES: dict[float, np.ndarray] = {}
+for _g in (0.5, 0.7, 1.5):
+    _GAMMA_TABLES[_g] = np.array([
+        np.clip(((i / 255.0) ** _g) * 255, 0, 255) for i in range(256)
+    ], dtype=np.uint8)
+
 
 def parse_mac_address(qr_data: Optional[str]) -> Optional[str]:
     """
@@ -188,11 +195,7 @@ def _preprocessing_variants(
         variants.append((f"morph_b{block_size}_pad", _add_quiet_zone(cleaned)))
 
     # Gamma correction — recovers detail in shadowed areas
-    for gamma in (0.5, 0.7, 1.5):
-        table = np.array([
-            np.clip(((i / 255.0) ** gamma) * 255, 0, 255)
-            for i in range(256)
-        ], dtype=np.uint8)
+    for gamma, table in _GAMMA_TABLES.items():
         corrected = cv2.LUT(gray, table)
         variants.append((f"gamma_{gamma}", corrected))
         variants.append((f"gamma_{gamma}_pad", _add_quiet_zone(corrected)))

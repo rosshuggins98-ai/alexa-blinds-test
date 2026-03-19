@@ -190,14 +190,14 @@ class TestDecodeQr:
         kern /= kern.sum()
         blurred = cv2.filter2D(canvas, -1, kern)
 
-        # Uneven lighting
+        # Uneven lighting via vectorised NumPy operations
         rows, cols = blurred.shape[:2]
-        for y in range(rows):
-            for x in range(cols):
-                factor = 1.3 - 0.6 * (x / cols) - 0.15 * (1 - y / rows)
-                blurred[y, x] = np.clip(
-                    blurred[y, x].astype(np.float32) * factor, 0, 255,
-                ).astype(np.uint8)
+        ys = np.arange(rows).reshape(-1, 1)
+        xs = np.arange(cols).reshape(1, -1)
+        factor = 1.3 - 0.6 * (xs / cols) - 0.15 * (1 - ys / rows)
+        blurred = np.clip(
+            blurred.astype(np.float32) * factor[:, :, np.newaxis], 0, 255,
+        ).astype(np.uint8)
 
         noise = np.random.normal(0, 8, blurred.shape).astype(np.int16)
         noisy = np.clip(blurred.astype(np.int16) + noise, 0, 255).astype(np.uint8)
