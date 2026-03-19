@@ -41,11 +41,18 @@ async def scan_devices(
     await scanner.stop()
 
     results: list[BLEDevice] = []
-    for device, _adv in devices.values():
+    for device, adv in devices.values():
         if name_filter:
             name = device.name or ""
             if name_filter.lower() not in name.lower():
                 continue
+        # Attach manufacturer data as a hex string so callers can match
+        # pairing codes against BLE advertisement payloads.
+        mfr_hex_parts: list[str] = []
+        if adv.manufacturer_data:
+            for _company_id, data in adv.manufacturer_data.items():
+                mfr_hex_parts.append(data.hex().upper())
+        device.manufacturer_data_hex = " ".join(mfr_hex_parts)  # type: ignore[attr-defined]
         results.append(device)
 
     return results

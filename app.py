@@ -454,8 +454,9 @@ class ScanTab(ttk.Frame):
     def _auto_select_by_pairing_code(self) -> bool:
         """If a QR pairing code was scanned, try to find a matching device.
 
-        Checks both device names and MAC addresses for the pairing code
-        substring (case-insensitive).  Tags matching rows in the tree.
+        Checks device names, MAC addresses, and BLE manufacturer data for
+        the pairing code substring (case-insensitive).  Tags matching rows
+        in the tree.
 
         Returns ``True`` if at least one matching device was found.
         """
@@ -466,7 +467,8 @@ class ScanTab(ttk.Frame):
         for device in self._app._scanned_devices:
             name = (device.name or "").upper()
             addr = device.address.upper().replace(":", "").replace("-", "")
-            if code_upper in name or code_upper in addr:
+            mfr = getattr(device, "manufacturer_data_hex", "").upper()
+            if code_upper in name or code_upper in addr or code_upper in mfr:
                 matches.append(device)
                 # Highlight the matching row with a tag
                 try:
@@ -476,6 +478,9 @@ class ScanTab(ttk.Frame):
 
         if matches:
             self._tree.tag_configure("qr_match", background="#d4edda")
+            # Ensure ttk theme does not override tag background colours
+            style = ttk.Style()
+            style.map("Treeview", background=[])
             first = matches[0]
             self._tree.selection_set(first.address)
             self._tree.see(first.address)

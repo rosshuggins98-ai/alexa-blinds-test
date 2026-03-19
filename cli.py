@@ -142,6 +142,7 @@ async def cmd_pair(args: argparse.Namespace) -> None:
         d for d in devices
         if code_upper in (d.name or "").upper()
         or code_upper in d.address.upper().replace(":", "").replace("-", "")
+        or code_upper in getattr(d, "manufacturer_data_hex", "").upper()
     ]
 
     if matches:
