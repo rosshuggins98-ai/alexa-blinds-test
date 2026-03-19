@@ -142,6 +142,7 @@ async def cmd_pair(args: argparse.Namespace) -> None:
         d for d in devices
         if code_upper in (d.name or "").upper()
         or code_upper in d.address.upper().replace(":", "").replace("-", "")
+        or code_upper in d.manufacturer_data_hex.upper()
     ]
 
     if matches:
@@ -210,6 +211,7 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
                 d for d in devices
                 if code_upper in (d.name or "").upper()
                 or code_upper in d.address.upper().replace(":", "").replace("-", "")
+                or code_upper in d.manufacturer_data_hex.upper()
             ]
             if matches:
                 print(f"✓ Found {len(matches)} device(s) matching pairing code {code}:")
@@ -234,6 +236,7 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
                     d for d in devices
                     if code_upper in (d.name or "").upper()
                     or code_upper in d.address.upper().replace(":", "").replace("-", "")
+                    or code_upper in d.manufacturer_data_hex.upper()
                 ]
                 if matches:
                     address = matches[0].address
@@ -359,6 +362,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Immediately connect to the device after reading the QR code.",
     )
 
+    # pair
+    p_pair = subparsers.add_parser(
+        "pair",
+        help="Find a device by its hex pairing code and optionally connect.",
+    )
+    p_pair.add_argument(
+        "code",
+        help="Hex pairing code from the blind's QR sticker (e.g. BFC83FE0).",
+    )
+    p_pair.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="BLE scan duration in seconds (default: 10).",
+    )
+    p_pair.add_argument(
+        "--connect",
+        action="store_true",
+        help="Automatically connect to the first matching device.",
+    )
+
     return parser
 
 
@@ -379,6 +404,7 @@ def main() -> None:
         "listen": cmd_listen,
         "send": cmd_send,
         "qr-scan": cmd_qr_scan,
+        "pair": cmd_pair,
     }
 
     handler = handlers.get(args.command)

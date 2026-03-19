@@ -19,11 +19,9 @@ import tkinter.ttk as ttk
 from tkinter import filedialog, messagebox, scrolledtext
 from typing import Optional
 
-from bleak.backends.device import BLEDevice
-
 from client import BlindsClient
 from qr_reader import parse_mac_address, parse_pairing_code, read_qr_from_camera, read_qr_from_image
-from scanner import scan_devices
+from scanner import ScannedDevice, scan_devices
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +60,8 @@ class BlindsApp(tk.Tk):
 
         # Shared state
         self._client: Optional[BlindsClient] = None
-        self._selected_device: Optional[BLEDevice] = None
-        self._scanned_devices: list[BLEDevice] = []
+        self._selected_device: Optional[ScannedDevice] = None
+        self._scanned_devices: list[ScannedDevice] = []
         # (service_uuid, char_uuid, properties) tuples
         self._characteristics: list[tuple[str, str, str]] = []
 
@@ -122,7 +120,7 @@ class BlindsApp(tk.Tk):
         """Update the bottom status bar (thread-safe)."""
         self.after(0, lambda: self._status_var.set(msg))
 
-    def _select_device(self, device: BLEDevice) -> None:
+    def _select_device(self, device: ScannedDevice) -> None:
         """Called by ScanTab when the user picks a device."""
         self._selected_device = device
         name = device.name or "(unknown)"
@@ -298,6 +296,13 @@ class ScanTab(ttk.Frame):
         self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.LEFT, fill=tk.Y)
 
+        # Ensure ttk theme does not override tag background colours (e.g.
+        # the green highlight for pairing-code matches).  Passing an empty
+        # list clears the theme's default state-based background mappings,
+        # allowing per-row tag_configure colours to take precedence.
+        style = ttk.Style()
+        style.map("Treeview", background=[])
+
         # Select button
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, pady=(6, 0))
@@ -359,7 +364,8 @@ class ScanTab(ttk.Frame):
             self._qr_pairing_code = None
             self._qr_status_var.set(f"✓ Device MAC: {mac}")
             self._app.set_status(f"QR scan successful — device MAC: {mac}")
-            self._auto_select_qr_device()
+            if not self._auto_select_qr_device():
+                self._start_scan()
             return
 
         code = parse_pairing_code(data)
@@ -367,9 +373,10 @@ class ScanTab(ttk.Frame):
             self._qr_mac = None
             self._qr_pairing_code = code
             self._qr_status_var.set(
-                f"✓ Pairing code: {code}  — scan BLE devices to find your blind")
+                f"✓ Pairing code: {code}")
             self._app.set_status(f"QR scan successful — pairing code: {code}")
-            self._auto_select_by_pairing_code()
+            if not self._auto_select_by_pairing_code():
+                self._start_scan()
             return
 
         # Fallback — show whatever we got
@@ -396,7 +403,8 @@ class ScanTab(ttk.Frame):
             self._qr_pairing_code = None
             self._qr_status_var.set(f"✓ Device MAC: {mac}")
             self._app.set_status(f"Manual entry — device MAC: {mac}")
-            self._auto_select_qr_device()
+            if not self._auto_select_qr_device():
+                self._start_scan()
             return
 
         code = parse_pairing_code(raw)
@@ -404,9 +412,10 @@ class ScanTab(ttk.Frame):
             self._qr_mac = None
             self._qr_pairing_code = code
             self._qr_status_var.set(
-                f"✓ Pairing code: {code}  — scan BLE devices to find your blind")
+                f"✓ Pairing code: {code}")
             self._app.set_status(f"Manual entry — pairing code: {code}")
-            self._auto_select_by_pairing_code()
+            if not self._auto_select_by_pairing_code():
+                self._start_scan()
             return
 
         # Accept any even-length hex string the user types
@@ -416,9 +425,10 @@ class ScanTab(ttk.Frame):
             self._qr_mac = None
             self._qr_pairing_code = cleaned
             self._qr_status_var.set(
-                f"✓ Pairing code: {cleaned}  — scan BLE devices to find your blind")
+                f"✓ Pairing code: {cleaned}")
             self._app.set_status(f"Manual entry — pairing code: {cleaned}")
-            self._auto_select_by_pairing_code()
+            if not self._auto_select_by_pairing_code():
+                self._start_scan()
             return
 
         messagebox.showwarning(
@@ -427,10 +437,13 @@ class ScanTab(ttk.Frame):
             "a MAC address (e.g. AA:BB:CC:DD:EE:FF)."
         )
 
-    def _auto_select_qr_device(self) -> None:
-        """If a QR MAC was scanned, try to select the matching device."""
+    def _auto_select_qr_device(self) -> bool:
+        """If a QR MAC was scanned, try to select the matching device.
+
+        Returns ``True`` if a matching device was found and selected.
+        """
         if not self._qr_mac:
-            return
+            return False
         mac_upper = self._qr_mac.upper()
         for device in self._app._scanned_devices:
             if device.address.upper() == mac_upper:
@@ -440,22 +453,27 @@ class ScanTab(ttk.Frame):
                 self._app._select_device(device)
                 self._app.set_status(
                     f"Auto-selected device matching QR code: {device.name or device.address}")
-                return
+                return True
+        return False
 
-    def _auto_select_by_pairing_code(self) -> None:
+    def _auto_select_by_pairing_code(self) -> bool:
         """If a QR pairing code was scanned, try to find a matching device.
 
-        Checks both device names and MAC addresses for the pairing code
-        substring (case-insensitive).  Tags matching rows in the tree.
+        Checks device names, MAC addresses, and BLE manufacturer data for
+        the pairing code substring (case-insensitive).  Tags matching rows
+        in the tree.
+
+        Returns ``True`` if at least one matching device was found.
         """
         if not self._qr_pairing_code:
-            return
+            return False
         code_upper = self._qr_pairing_code.upper()
-        matches: list[BLEDevice] = []
+        matches: list[ScannedDevice] = []
         for device in self._app._scanned_devices:
             name = (device.name or "").upper()
             addr = device.address.upper().replace(":", "").replace("-", "")
-            if code_upper in name or code_upper in addr:
+            mfr = device.manufacturer_data_hex.upper()
+            if code_upper in name or code_upper in addr or code_upper in mfr:
                 matches.append(device)
                 # Highlight the matching row with a tag
                 try:
@@ -472,11 +490,13 @@ class ScanTab(ttk.Frame):
             self._app.set_status(
                 f"Found {len(matches)} device(s) matching pairing code "
                 f"{self._qr_pairing_code}: {first.name or first.address}")
+            return True
         else:
             if self._app._scanned_devices:
                 self._app.set_status(
                     f"No device found matching pairing code "
                     f"{self._qr_pairing_code} — try scanning again")
+            return False
 
     # -- BLE scanning ------------------------------------------------
 
@@ -494,7 +514,7 @@ class ScanTab(ttk.Frame):
 
         def _done(fut):
             try:
-                devices: list[BLEDevice] = fut.result()
+                devices: list[ScannedDevice] = fut.result()
                 self._app.after(0, self._populate, devices)
             except Exception as exc:  # noqa: BLE001
                 self._app.after(0, self._scan_error, exc)
@@ -502,7 +522,7 @@ class ScanTab(ttk.Frame):
         _run_async(scan_devices(timeout=timeout, name_filter=name_filter)).add_done_callback(
             _done)
 
-    def _populate(self, devices: list[BLEDevice]) -> None:
+    def _populate(self, devices: list[ScannedDevice]) -> None:
         self._app._scanned_devices = devices
         for device in devices:
             rssi = getattr(device, "rssi", "N/A")
