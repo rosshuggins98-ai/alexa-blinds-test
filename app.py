@@ -19,11 +19,9 @@ import tkinter.ttk as ttk
 from tkinter import filedialog, messagebox, scrolledtext
 from typing import Optional
 
-from bleak.backends.device import BLEDevice
-
 from client import BlindsClient
 from qr_reader import parse_mac_address, parse_pairing_code, read_qr_from_camera, read_qr_from_image
-from scanner import scan_devices
+from scanner import ScannedDevice, scan_devices
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +60,8 @@ class BlindsApp(tk.Tk):
 
         # Shared state
         self._client: Optional[BlindsClient] = None
-        self._selected_device: Optional[BLEDevice] = None
-        self._scanned_devices: list[BLEDevice] = []
+        self._selected_device: Optional[ScannedDevice] = None
+        self._scanned_devices: list[ScannedDevice] = []
         # (service_uuid, char_uuid, properties) tuples
         self._characteristics: list[tuple[str, str, str]] = []
 
@@ -122,7 +120,7 @@ class BlindsApp(tk.Tk):
         """Update the bottom status bar (thread-safe)."""
         self.after(0, lambda: self._status_var.set(msg))
 
-    def _select_device(self, device: BLEDevice) -> None:
+    def _select_device(self, device: ScannedDevice) -> None:
         """Called by ScanTab when the user picks a device."""
         self._selected_device = device
         name = device.name or "(unknown)"
@@ -298,6 +296,11 @@ class ScanTab(ttk.Frame):
         self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         vsb.pack(side=tk.LEFT, fill=tk.Y)
 
+        # Ensure ttk theme does not override tag background colours (e.g.
+        # the green highlight for pairing-code matches).
+        style = ttk.Style()
+        style.map("Treeview", background=[])
+
         # Select button
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, pady=(6, 0))
@@ -463,11 +466,11 @@ class ScanTab(ttk.Frame):
         if not self._qr_pairing_code:
             return False
         code_upper = self._qr_pairing_code.upper()
-        matches: list[BLEDevice] = []
+        matches: list[ScannedDevice] = []
         for device in self._app._scanned_devices:
             name = (device.name or "").upper()
             addr = device.address.upper().replace(":", "").replace("-", "")
-            mfr = getattr(device, "manufacturer_data_hex", "").upper()
+            mfr = device.manufacturer_data_hex.upper()
             if code_upper in name or code_upper in addr or code_upper in mfr:
                 matches.append(device)
                 # Highlight the matching row with a tag
@@ -478,9 +481,6 @@ class ScanTab(ttk.Frame):
 
         if matches:
             self._tree.tag_configure("qr_match", background="#d4edda")
-            # Ensure ttk theme does not override tag background colours
-            style = ttk.Style()
-            style.map("Treeview", background=[])
             first = matches[0]
             self._tree.selection_set(first.address)
             self._tree.see(first.address)
@@ -512,7 +512,7 @@ class ScanTab(ttk.Frame):
 
         def _done(fut):
             try:
-                devices: list[BLEDevice] = fut.result()
+                devices: list[ScannedDevice] = fut.result()
                 self._app.after(0, self._populate, devices)
             except Exception as exc:  # noqa: BLE001
                 self._app.after(0, self._scan_error, exc)
@@ -520,7 +520,7 @@ class ScanTab(ttk.Frame):
         _run_async(scan_devices(timeout=timeout, name_filter=name_filter)).add_done_callback(
             _done)
 
-    def _populate(self, devices: list[BLEDevice]) -> None:
+    def _populate(self, devices: list[ScannedDevice]) -> None:
         self._app._scanned_devices = devices
         for device in devices:
             rssi = getattr(device, "rssi", "N/A")

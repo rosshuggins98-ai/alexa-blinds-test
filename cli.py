@@ -142,7 +142,7 @@ async def cmd_pair(args: argparse.Namespace) -> None:
         d for d in devices
         if code_upper in (d.name or "").upper()
         or code_upper in d.address.upper().replace(":", "").replace("-", "")
-        or code_upper in getattr(d, "manufacturer_data_hex", "").upper()
+        or code_upper in d.manufacturer_data_hex.upper()
     ]
 
     if matches:
@@ -211,6 +211,7 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
                 d for d in devices
                 if code_upper in (d.name or "").upper()
                 or code_upper in d.address.upper().replace(":", "").replace("-", "")
+                or code_upper in d.manufacturer_data_hex.upper()
             ]
             if matches:
                 print(f"✓ Found {len(matches)} device(s) matching pairing code {code}:")
@@ -235,6 +236,7 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
                     d for d in devices
                     if code_upper in (d.name or "").upper()
                     or code_upper in d.address.upper().replace(":", "").replace("-", "")
+                    or code_upper in d.manufacturer_data_hex.upper()
                 ]
                 if matches:
                     address = matches[0].address
