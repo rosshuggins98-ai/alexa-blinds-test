@@ -7,6 +7,7 @@ Usage:
     python cli.py list-services <address>
     python cli.py listen <address>
     python cli.py send <address> <char-uuid> <hex-data>
+    python cli.py qr-scan [--image <path>] [--timeout <seconds>] [--connect]
 
 Examples:
     python cli.py scan
@@ -15,6 +16,9 @@ Examples:
     python cli.py list-services AA:BB:CC:DD:EE:FF
     python cli.py listen AA:BB:CC:DD:EE:FF
     python cli.py send AA:BB:CC:DD:EE:FF 0000fff1-0000-1000-8000-00805f9b34fb 01ff0a
+    python cli.py qr-scan
+    python cli.py qr-scan --image qr_photo.jpg
+    python cli.py qr-scan --image qr_photo.jpg --connect
 """
 
 import argparse
@@ -23,6 +27,7 @@ import logging
 import sys
 
 from client import BlindsClient
+from qr_reader import parse_mac_address, read_qr_from_camera, read_qr_from_image
 from scanner import print_devices, scan_devices
 
 
@@ -112,6 +117,38 @@ async def cmd_send(args: argparse.Namespace) -> None:
         await client.disconnect()
 
 
+async def cmd_qr_scan(args: argparse.Namespace) -> None:
+    """Read a QR code from camera or image file and extract the device MAC."""
+    if args.image:
+        qr_data = read_qr_from_image(args.image)
+    else:
+        qr_data = read_qr_from_camera(timeout_seconds=args.timeout)
+
+    if qr_data is None:
+        print("No QR code detected.", file=sys.stderr)
+        sys.exit(1)
+
+    mac = parse_mac_address(qr_data)
+    print(f"QR data : {qr_data}")
+    if mac:
+        print(f"Device MAC: {mac}")
+    else:
+        print("No MAC address found in QR data.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.connect:
+        print(f"\nConnecting to {mac}…")
+        client = BlindsClient(mac)
+        try:
+            await client.connect()
+            print(f"Successfully connected to {mac}.")
+        except Exception as exc:
+            print(f"[ERROR] Could not connect: {exc}", file=sys.stderr)
+            sys.exit(1)
+        finally:
+            await client.disconnect()
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -180,6 +217,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hex-encoded bytes to send (e.g. 01ff0a).",
     )
 
+    # qr-scan
+    p_qr = subparsers.add_parser(
+        "qr-scan",
+        help="Read the QR code on a blind to find its BLE MAC address.",
+    )
+    p_qr.add_argument(
+        "--image",
+        metavar="PATH",
+        default=None,
+        help="Path to an image file of the QR code. If omitted, opens the camera.",
+    )
+    p_qr.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        metavar="SECONDS",
+        help="Camera scan timeout in seconds (default: 30, ignored with --image).",
+    )
+    p_qr.add_argument(
+        "--connect",
+        action="store_true",
+        help="Immediately connect to the device after reading the QR code.",
+    )
+
     return parser
 
 
@@ -199,6 +260,7 @@ def main() -> None:
         "list-services": cmd_list_services,
         "listen": cmd_listen,
         "send": cmd_send,
+        "qr-scan": cmd_qr_scan,
     }
 
     handler = handlers.get(args.command)
