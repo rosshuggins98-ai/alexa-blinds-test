@@ -52,18 +52,37 @@ def parse_mac_address(qr_data: Optional[str]) -> Optional[str]:
 # Image preprocessing strategies
 # ---------------------------------------------------------------------------
 
-def _preprocessing_variants(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+def _preprocessing_variants(
+    img: np.ndarray,
+    *,
+    quick: bool = False,
+) -> list[tuple[str, np.ndarray]]:
     """
     Return a list of ``(name, image)`` tuples created by applying
     different preprocessing strategies to *img*.  The first entry is
     always the original image so the fast-path (clean QR) costs almost
     nothing.
+
+    When *quick* is ``True`` a smaller set of strategies is used, which
+    is better suited for per-frame camera scanning where latency matters.
     """
     variants: list[tuple[str, np.ndarray]] = [("original", img)]
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
     variants.append(("grayscale", gray))
 
+    if quick:
+        # Lightweight set for live camera frames
+        thresh = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            51, 10,
+        )
+        variants.append(("adaptive_b51_c10", thresh))
+        return variants
+
+    # Full set for static images (e.g. photos loaded from file).
     # Adaptive thresholding with various block sizes — the most
     # effective strategy for real-world photos with uneven lighting.
     for block_size in (31, 51, 101):
@@ -124,18 +143,20 @@ def _try_decode(img: np.ndarray) -> Optional[str]:
     return None
 
 
-def decode_qr(img: np.ndarray) -> Optional[str]:
+def decode_qr(img: np.ndarray, *, quick: bool = False) -> Optional[str]:
     """
     Decode a QR code from an OpenCV image array, trying multiple
     preprocessing strategies until one succeeds.
 
     Args:
         img: BGR or grayscale image (NumPy array).
+        quick: When ``True`` use a lightweight set of preprocessing
+            strategies suitable for live camera frames.
 
     Returns:
         Decoded QR string, or ``None`` if no QR code was found.
     """
-    for name, variant in _preprocessing_variants(img):
+    for name, variant in _preprocessing_variants(img, quick=quick):
         data = _try_decode(variant)
         if data:
             logger.info("QR decoded via '%s' strategy: %s", name, data)
@@ -213,7 +234,7 @@ def read_qr_from_camera(
             if not ret:
                 break
 
-            data = decode_qr(frame)
+            data = decode_qr(frame, quick=True)
             if data:
                 result = data
                 logger.info("QR code decoded from camera: %s", data)
