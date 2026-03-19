@@ -220,26 +220,49 @@ class ScanTab(ttk.Frame):
         self._build()
 
     def _build(self) -> None:
-        # ── QR Code row ───────────────────────────────────────────────
-        qr_frame = ttk.LabelFrame(self, text="Step 1 — Scan QR Code on Blind", padding=6)
+        # ── QR Code / Pairing Code ────────────────────────────────────
+        qr_frame = ttk.LabelFrame(self, text="Step 1 — Identify Your Blind", padding=6)
         qr_frame.pack(fill=tk.X, pady=(0, 8))
 
+        # Row 1: QR scanning
+        qr_row = ttk.Frame(qr_frame)
+        qr_row.pack(fill=tk.X)
+
         ttk.Label(
-            qr_frame,
-            text="Scan the QR code on your blind to identify the correct device.",
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            qr_row,
+            text="Scan QR code:",
+        ).pack(side=tk.LEFT)
 
         self._btn_qr_camera = ttk.Button(
-            qr_frame, text="📷  Camera", command=self._qr_scan_camera)
-        self._btn_qr_camera.pack(side=tk.RIGHT, padx=(4, 0))
+            qr_row, text="📷  Camera", command=self._qr_scan_camera)
+        self._btn_qr_camera.pack(side=tk.LEFT, padx=(8, 0))
 
         self._btn_qr_file = ttk.Button(
-            qr_frame, text="📁  Image File", command=self._qr_scan_file)
-        self._btn_qr_file.pack(side=tk.RIGHT, padx=(4, 0))
+            qr_row, text="📁  Image File", command=self._qr_scan_file)
+        self._btn_qr_file.pack(side=tk.LEFT, padx=(4, 0))
 
-        self._qr_status_var = tk.StringVar(value="No QR code scanned yet.")
-        ttk.Label(qr_frame, textvariable=self._qr_status_var,
+        self._qr_status_var = tk.StringVar(value="")
+        ttk.Label(qr_row, textvariable=self._qr_status_var,
                   foreground="grey").pack(side=tk.LEFT, padx=(12, 0))
+
+        # Row 2: Manual pairing code entry
+        code_row = ttk.Frame(qr_frame)
+        code_row.pack(fill=tk.X, pady=(4, 0))
+
+        ttk.Label(code_row, text="Or enter code:").pack(side=tk.LEFT)
+        self._code_var = tk.StringVar()
+        self._code_entry = ttk.Entry(code_row, textvariable=self._code_var, width=20)
+        self._code_entry.pack(side=tk.LEFT, padx=(8, 0))
+
+        self._btn_code_apply = ttk.Button(
+            code_row, text="Apply", command=self._apply_manual_code)
+        self._btn_code_apply.pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Label(
+            code_row,
+            text="(hex code printed on the blind's QR sticker, e.g. BFC83FE0)",
+            foreground="grey",
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
         # ── BLE scan controls ────────────────────────────────────────
         scan_frame = ttk.LabelFrame(self, text="Step 2 — Scan for BLE Devices", padding=6)
@@ -323,8 +346,11 @@ class ScanTab(ttk.Frame):
     def _on_qr_result(self, data: Optional[str]) -> None:
         self._btn_qr_camera.config(state=tk.NORMAL)
         if data is None:
-            self._qr_status_var.set("No QR code detected — try again.")
-            self._app.set_status("QR scan: no code detected.")
+            self._qr_status_var.set(
+                "No QR code detected — enter the code manually below.")
+            self._app.set_status(
+                "QR scan: no code detected.  "
+                "Tip: enter the pairing code printed on the QR sticker manually.")
             return
 
         mac = parse_mac_address(data)
@@ -357,6 +383,49 @@ class ScanTab(ttk.Frame):
         self._qr_status_var.set("QR scan failed.")
         self._app.set_status(f"QR scan error: {exc}")
         messagebox.showerror("QR Scan Error", str(exc))
+
+    def _apply_manual_code(self) -> None:
+        """Apply a manually-entered pairing code or MAC address."""
+        raw = self._code_var.get().strip()
+        if not raw:
+            return
+
+        mac = parse_mac_address(raw)
+        if mac:
+            self._qr_mac = mac
+            self._qr_pairing_code = None
+            self._qr_status_var.set(f"✓ Device MAC: {mac}")
+            self._app.set_status(f"Manual entry — device MAC: {mac}")
+            self._auto_select_qr_device()
+            return
+
+        code = parse_pairing_code(raw)
+        if code:
+            self._qr_mac = None
+            self._qr_pairing_code = code
+            self._qr_status_var.set(
+                f"✓ Pairing code: {code}  — scan BLE devices to find your blind")
+            self._app.set_status(f"Manual entry — pairing code: {code}")
+            self._auto_select_by_pairing_code()
+            return
+
+        # Accept any even-length hex string the user types
+        cleaned = raw.upper().replace(" ", "").replace(":", "").replace("-", "")
+        import re
+        if re.fullmatch(r"[0-9A-F]{4,16}", cleaned) and len(cleaned) % 2 == 0:
+            self._qr_mac = None
+            self._qr_pairing_code = cleaned
+            self._qr_status_var.set(
+                f"✓ Pairing code: {cleaned}  — scan BLE devices to find your blind")
+            self._app.set_status(f"Manual entry — pairing code: {cleaned}")
+            self._auto_select_by_pairing_code()
+            return
+
+        messagebox.showwarning(
+            "Invalid Code",
+            "Enter a hex pairing code (e.g. BFC83FE0) or "
+            "a MAC address (e.g. AA:BB:CC:DD:EE:FF)."
+        )
 
     def _auto_select_qr_device(self) -> None:
         """If a QR MAC was scanned, try to select the matching device."""

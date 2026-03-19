@@ -8,6 +8,7 @@ Usage:
     python cli.py listen <address>
     python cli.py send <address> <char-uuid> <hex-data>
     python cli.py qr-scan [--image <path>] [--timeout <seconds>] [--scan] [--connect]
+    python cli.py pair <code> [--timeout <seconds>] [--connect]
 
 Examples:
     python cli.py scan
@@ -20,6 +21,8 @@ Examples:
     python cli.py qr-scan --image qr_photo.jpg
     python cli.py qr-scan --image qr_photo.jpg --scan
     python cli.py qr-scan --image qr_photo.jpg --connect
+    python cli.py pair BFC83FE0
+    python cli.py pair BFC83FE0 --connect
 """
 
 import argparse
@@ -116,6 +119,58 @@ async def cmd_send(args: argparse.Namespace) -> None:
         sys.exit(1)
     finally:
         await client.disconnect()
+
+
+async def cmd_pair(args: argparse.Namespace) -> None:
+    """Find a device by pairing code and optionally connect to it."""
+    import re
+
+    code = args.code.upper().replace(" ", "").replace(":", "").replace("-", "")
+    if not re.fullmatch(r"[0-9A-F]{4,16}", code) or len(code) % 2 != 0:
+        print("[ERROR] Invalid pairing code. Expected 4-16 hex characters "
+              "(e.g. BFC83FE0).", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Pairing code: {code}")
+    timeout = getattr(args, "timeout", 10.0)
+    print(f"Scanning for BLE devices ({timeout:.0f}s)…")
+    devices = await scan_devices(timeout=timeout)
+    print_devices(devices)
+
+    code_upper = code.upper()
+    matches = [
+        d for d in devices
+        if code_upper in (d.name or "").upper()
+        or code_upper in d.address.upper().replace(":", "").replace("-", "")
+    ]
+
+    if matches:
+        print(f"\n✓ Found {len(matches)} device(s) matching pairing code {code}:")
+        for d in matches:
+            name = d.name or "(unknown)"
+            print(f"  → {name}  {d.address}")
+    else:
+        print(f"\nNo devices found matching pairing code {code}.")
+        print("Tip: make sure the blind is powered on and in range.")
+        if not args.connect:
+            sys.exit(1)
+
+    if args.connect:
+        if not matches:
+            print("[ERROR] No matching device to connect to.", file=sys.stderr)
+            sys.exit(1)
+        address = matches[0].address
+        name = matches[0].name or address
+        print(f"\nConnecting to {name} ({address})…")
+        client = BlindsClient(address)
+        try:
+            await client.connect()
+            print(f"Successfully connected to {name} ({address}).")
+        except Exception as exc:
+            print(f"[ERROR] Could not connect: {exc}", file=sys.stderr)
+            sys.exit(1)
+        finally:
+            await client.disconnect()
 
 
 async def cmd_qr_scan(args: argparse.Namespace) -> None:
