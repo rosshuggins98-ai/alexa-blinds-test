@@ -3,6 +3,11 @@ qr_reader.py - QR Code Reader for Tuiss SmartView Blinds Pairing
 
 Reads QR codes from camera or image files and extracts the BLE MAC
 address used to identify the correct blind during pairing.
+
+Uses multiple image-preprocessing strategies (adaptive thresholding,
+contrast enhancement, sharpening, etc.) combined with both OpenCV and
+pyzbar decoders so that real-world photos — taken at an angle, with
+uneven lighting, or through a phone camera — are decoded reliably.
 """
 
 import logging
@@ -12,6 +17,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+from pyzbar.pyzbar import decode as pyzbar_decode
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +48,112 @@ def parse_mac_address(qr_data: Optional[str]) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Image preprocessing strategies
+# ---------------------------------------------------------------------------
+
+def _preprocessing_variants(img: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """
+    Return a list of ``(name, image)`` tuples created by applying
+    different preprocessing strategies to *img*.  The first entry is
+    always the original image so the fast-path (clean QR) costs almost
+    nothing.
+    """
+    variants: list[tuple[str, np.ndarray]] = [("original", img)]
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    variants.append(("grayscale", gray))
+
+    # Adaptive thresholding with various block sizes — the most
+    # effective strategy for real-world photos with uneven lighting.
+    for block_size in (31, 51, 101):
+        for c_val in (5, 10, 15):
+            thresh = cv2.adaptiveThreshold(
+                gray, 255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                block_size, c_val,
+            )
+            variants.append((f"adaptive_b{block_size}_c{c_val}", thresh))
+
+    # CLAHE contrast enhancement
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    variants.append(("clahe", enhanced))
+
+    # Otsu binarisation
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    variants.append(("otsu", otsu))
+
+    # Sharpening
+    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+    sharpened = cv2.filter2D(gray, -1, kernel)
+    variants.append(("sharpen", sharpened))
+
+    return variants
+
+
+def _try_decode(img: np.ndarray) -> Optional[str]:
+    """
+    Attempt to decode a QR code from *img* using both the OpenCV
+    detector and pyzbar.  Returns the decoded string or ``None``.
+    """
+    # --- pyzbar (generally more robust for real-world images) ---
+    try:
+        results = pyzbar_decode(img)
+        if results:
+            data = results[0].data.decode("utf-8", errors="replace")
+            if data:
+                return data
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- OpenCV QRCodeDetector ---
+    try:
+        if len(img.shape) == 2:
+            detect_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        else:
+            detect_img = img
+        detector = cv2.QRCodeDetector()
+        data, _, _ = detector.detectAndDecode(detect_img)
+        if data:
+            return data
+    except Exception:  # noqa: BLE001
+        pass
+
+    return None
+
+
+def decode_qr(img: np.ndarray) -> Optional[str]:
+    """
+    Decode a QR code from an OpenCV image array, trying multiple
+    preprocessing strategies until one succeeds.
+
+    Args:
+        img: BGR or grayscale image (NumPy array).
+
+    Returns:
+        Decoded QR string, or ``None`` if no QR code was found.
+    """
+    for name, variant in _preprocessing_variants(img):
+        data = _try_decode(variant)
+        if data:
+            logger.info("QR decoded via '%s' strategy: %s", name, data)
+            return data
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def read_qr_from_image(image_path: str) -> Optional[str]:
     """
     Decode a QR code from an image file.
+
+    Uses multiple preprocessing strategies and decoders so that
+    real-world photos (angled, blurry, uneven lighting) are handled
+    reliably.
 
     Args:
         image_path: Path to the image file (PNG, JPEG, etc.).
@@ -60,9 +169,7 @@ def read_qr_from_image(image_path: str) -> Optional[str]:
     if img is None:
         raise ValueError(f"Could not read image: {image_path}")
 
-    detector = cv2.QRCodeDetector()
-    data, points, _ = detector.detectAndDecode(img)
-
+    data = decode_qr(img)
     if data:
         logger.info("QR code decoded from file: %s", data)
         return data
@@ -96,7 +203,6 @@ def read_qr_from_camera(
             "Make sure a camera is connected."
         )
 
-    detector = cv2.QRCodeDetector()
     result: Optional[str] = None
     start = cv2.getTickCount()
     freq = cv2.getTickFrequency()
@@ -107,7 +213,7 @@ def read_qr_from_camera(
             if not ret:
                 break
 
-            data, points, _ = detector.detectAndDecode(frame)
+            data = decode_qr(frame)
             if data:
                 result = data
                 logger.info("QR code decoded from camera: %s", data)

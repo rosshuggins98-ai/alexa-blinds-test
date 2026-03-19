@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from qr_reader import parse_mac_address, read_qr_from_image
+from qr_reader import decode_qr, parse_mac_address, read_qr_from_image
 
 
 # ---------------------------------------------------------------------------
@@ -108,3 +108,72 @@ class TestReadQrFromImage:
 
         result = read_qr_from_image(img_path)
         assert result == mac
+
+
+# ---------------------------------------------------------------------------
+# decode_qr — robust detection with preprocessing
+# ---------------------------------------------------------------------------
+
+class TestDecodeQr:
+    """Test the multi-strategy QR decoder against degraded images."""
+
+    @staticmethod
+    def _make_qr(text: str = "AA:BB:CC:DD:EE:FF", size: int = 100) -> np.ndarray:
+        """Helper: generate a clean QR code as a grayscale image."""
+        import cv2
+
+        encoder = cv2.QRCodeEncoder.create()
+        qr = encoder.encode(text)
+        return cv2.resize(qr, (size, size), interpolation=cv2.INTER_NEAREST)
+
+    def test_clean_image(self):
+        """A clean QR should be decoded on the fast path."""
+        import cv2
+
+        qr = self._make_qr()
+        img = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR)
+        assert decode_qr(img) == "AA:BB:CC:DD:EE:FF"
+
+    def test_low_contrast(self):
+        """A washed-out, low-contrast image should still be decoded."""
+        import cv2
+
+        qr = self._make_qr()
+        canvas = np.full((400, 400, 3), 190, dtype=np.uint8)
+        qr_c = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR)
+        canvas[50:150, 200:300] = qr_c
+        low_contrast = cv2.convertScaleAbs(canvas, alpha=0.35, beta=100)
+        assert decode_qr(low_contrast) == "AA:BB:CC:DD:EE:FF"
+
+    def test_noisy_image(self):
+        """A noisy image should still be decoded via preprocessing."""
+        import cv2
+
+        qr = self._make_qr(size=200)
+        canvas = np.full((500, 500, 3), 200, dtype=np.uint8)
+        qr_c = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR)
+        canvas[50:250, 200:400] = qr_c
+        noise = np.random.normal(0, 25, canvas.shape).astype(np.int16)
+        noisy = np.clip(canvas.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        assert decode_qr(noisy) == "AA:BB:CC:DD:EE:FF"
+
+    def test_combined_degradation(self):
+        """Blur + low contrast + noise + JPEG — simulating a real phone photo."""
+        import cv2
+
+        qr = self._make_qr(size=150)
+        canvas = np.full((600, 400, 3), 190, dtype=np.uint8)
+        qr_c = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR)
+        canvas[50:200, 150:300] = qr_c
+
+        blurred = cv2.GaussianBlur(canvas, (5, 5), 1.5)
+        low_c = cv2.convertScaleAbs(blurred, alpha=0.4, beta=90)
+        noise = np.random.normal(0, 12, low_c.shape).astype(np.int16)
+        degraded = np.clip(low_c.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+        assert decode_qr(degraded) == "AA:BB:CC:DD:EE:FF"
+
+    def test_blank_image_returns_none(self):
+        """A completely blank image should return None."""
+        blank = np.zeros((200, 200, 3), dtype=np.uint8)
+        assert decode_qr(blank) is None
