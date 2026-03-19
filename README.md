@@ -85,8 +85,8 @@ The app has four tabs:
      sticker into the manual entry field and click **Apply**, or
    - Simply click **Scan** to discover all nearby BLE devices and pick
      yours from the list.
-2. If you used a QR code or pairing code, click **Scan** — matching
-   devices are highlighted in green automatically.
+2. If you used a QR code or pairing code, the app automatically scans for
+   nearby BLE devices and highlights matches in green.
 3. Double-click a device (or select it and click **Select Device →**).
 4. Click **Connect** in the top bar.
 5. Switch to **Services** to explore the GATT profile.
