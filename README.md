@@ -12,17 +12,42 @@ step toward full Alexa integration.
 - A Bluetooth adapter (built-in or USB dongle)
 - Windows, macOS, or Linux
 
+### System dependencies for QR code features
+
+The QR code reader (`qr-scan` command and GUI QR scanning) uses
+[pyzbar](https://pypi.org/project/pyzbar/) which requires the **zbar**
+shared library:
+
+| OS | Install command |
+|---|---|
+| Ubuntu / Debian | `sudo apt install libzbar0` |
+| Fedora | `sudo dnf install zbar` |
+| macOS | `brew install zbar` |
+| Windows | Included with the pyzbar wheel — no extra step needed |
+
+> QR scanning is **optional**. The core BLE features (scan, connect,
+> listen, send) only need `bleak` and work without zbar.
+
 ---
 
 ## Setup
 
-Install the single dependency using the requirements file (recommended):
+Install all dependencies using the requirements file:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Or install directly:
+This installs:
+
+| Package | Purpose |
+|---|---|
+| [bleak](https://pypi.org/project/bleak/) | Bluetooth Low Energy communication |
+| [opencv-contrib-python-headless](https://pypi.org/project/opencv-contrib-python-headless/) | QR code decoding (includes WeChatQRCode) |
+| [pyzbar](https://pypi.org/project/pyzbar/) | Additional QR code decoder |
+
+If you only need the core BLE features (no QR scanning) you can install
+just bleak:
 
 ```bash
 pip install bleak
@@ -52,12 +77,23 @@ The app has four tabs:
 
 ### Quick start
 
-1. Click **Scan** — devices appear in the list.
-2. Double-click a device (or select it and click **Select Device →**).
-3. Click **Connect** in the top bar.
-4. Switch to **Services** to explore the GATT profile.
-5. Switch to **Listen**, click **Start Listening**, then use the Tuiss app to capture commands.
-6. Switch to **Send**, pick a write characteristic, enter hex bytes, and click **Send**.
+1. **Identify your blind** — use one of these methods in the Scan tab:
+   - 📷 Click the **camera button** to scan the QR code on the blind's
+     battery compartment with your webcam, or
+   - 📁 Click the **image file button** to load a photo of the QR code, or
+   - ⌨️ Type the **hex pairing code** (e.g. `BFC83FE0`) from the QR
+     sticker into the manual entry field and click **Apply**, or
+   - Simply click **Scan** to discover all nearby BLE devices and pick
+     yours from the list.
+2. If you used a QR code or pairing code, click **Scan** — matching
+   devices are highlighted in green automatically.
+3. Double-click a device (or select it and click **Select Device →**).
+4. Click **Connect** in the top bar.
+5. Switch to **Services** to explore the GATT profile.
+6. Switch to **Listen**, click **Start Listening**, then use the Tuiss app
+   to capture commands.
+7. Switch to **Send**, pick a write characteristic, enter hex bytes, and
+   click **Send**.
 
 ---
 
@@ -76,6 +112,8 @@ python cli.py [-v] <command> [options]
 | `list-services <address>` | Enumerate GATT services and characteristics |
 | `listen <address>` | Sniff/log all BLE notifications |
 | `send <address> <char-uuid> <hex>` | Send raw bytes to a characteristic |
+| `pair <code>` | Find a BLE device by its hex pairing code |
+| `qr-scan` | Read the QR code on a blind (camera or image file) |
 
 ### Examples
 
@@ -105,16 +143,56 @@ python cli.py send AA:BB:CC:DD:EE:FF 0000fff1-0000-1000-8000-00805f9b34fb 01ff0a
 python cli.py -v scan
 ```
 
+### Connecting with a pairing code
+
+Each Tuiss SmartView blind has a small QR code sticker in the battery
+compartment.  Scanning (or reading) this QR code gives you a **hex
+pairing code** such as `BFC83FE0`.  The tool matches this code against
+the names and addresses of nearby BLE devices to find your blind.
+
+```bash
+# Find the blind that matches pairing code BFC83FE0
+python cli.py pair BFC83FE0
+
+# Find the blind and immediately connect to it
+python cli.py pair BFC83FE0 --connect
+
+# Allow a longer BLE scan (default is 10 seconds)
+python cli.py pair BFC83FE0 --timeout 20 --connect
+```
+
+If you have a photo of the QR code you can let the tool read it
+automatically:
+
+```bash
+# Read the QR code from an image file
+python cli.py qr-scan --image qr_photo.jpg
+
+# Read the QR code and scan for matching BLE devices
+python cli.py qr-scan --image qr_photo.jpg --scan
+
+# Read the QR code, find the matching device, and connect
+python cli.py qr-scan --image qr_photo.jpg --connect
+
+# Use the webcam to scan the QR code (live camera view)
+python cli.py qr-scan
+
+# Camera scan with a custom timeout (default 30 seconds)
+python cli.py qr-scan --timeout 15
+```
+
 ---
 
 ## Project Structure
 
 ```
 .
-├── app.py          # Desktop GUI (tkinter) — launch with: python app.py
-├── cli.py          # CLI entry point
-├── scanner.py      # BLE scanner (scan & filter devices)
-├── client.py       # BLE client (connect, services, notify, send)
+├── app.py              # Desktop GUI (tkinter) — launch with: python app.py
+├── cli.py              # CLI entry point
+├── scanner.py          # BLE scanner (scan & filter devices)
+├── client.py           # BLE client (connect, services, notify, send)
+├── qr_reader.py        # QR code reader & pairing-code parser
+├── test_qr_reader.py   # Tests for the QR reader module
 ├── requirements.txt
 └── README.md
 ```
@@ -125,11 +203,31 @@ python cli.py -v scan
 
 ### Step 1 — Discover your blinds
 
+**Option A — Scan by name** (no pairing code needed):
+
 ```bash
 python cli.py scan --filter blind
 ```
 
 Note the **MAC address** shown for your Tuiss device.
+
+**Option B — Use a known pairing code** (recommended):
+
+Look at the QR code sticker in the battery compartment of your blind.
+The code is typically 8 hex characters (e.g. `BFC83FE0`).
+
+```bash
+python cli.py pair BFC83FE0
+```
+
+The tool scans for nearby BLE devices and highlights any whose name or
+MAC address contains the pairing code.
+
+**Option C — Scan the QR code directly**:
+
+```bash
+python cli.py qr-scan --image qr_photo.jpg --scan
+```
 
 ### Step 2 — Explore its GATT profile
 
@@ -157,6 +255,18 @@ Once you have identified a likely write characteristic and command bytes:
 ```bash
 python cli.py send AA:BB:CC:DD:EE:FF <char-uuid> <hex-command>
 ```
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `ModuleNotFoundError: No module named 'bleak'` | Run `pip install -r requirements.txt` |
+| `ImportError: Unable to find zbar shared library` | Install the zbar system library (see [Requirements](#system-dependencies-for-qr-code-features)) |
+| No devices found during scan | Make sure the blind is powered on, in range, and not connected to another app |
+| Pairing code doesn't match any device | Try a longer scan timeout (`--timeout 20`) or move closer to the blind |
+| `Could not open camera` | Ensure a webcam is connected; try `--image` with a photo instead |
 
 ---
 
