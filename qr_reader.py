@@ -28,8 +28,8 @@ _HAS_WECHAT_QR = hasattr(cv2, "wechat_qrcode")
 _MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}")
 
 # Regex pattern for hex pairing codes (e.g. BFC83FE0).
-# Matches a standalone 4-16 character hex string (even length only).
-_PAIRING_CODE_RE = re.compile(r"\b([0-9A-Fa-f]{4}(?:[0-9A-Fa-f]{2})*)\b")
+# Matches a standalone even-length hex string of 4–16 characters.
+_PAIRING_CODE_RE = re.compile(r"\b([0-9A-Fa-f]{4,16})\b")
 
 # Pre-computed gamma lookup tables (avoids recalculating on every call).
 _GAMMA_TABLES: dict[float, np.ndarray] = {}
@@ -86,7 +86,10 @@ def parse_pairing_code(qr_data: Optional[str]) -> Optional[str]:
         return None
     match = _PAIRING_CODE_RE.search(qr_data.strip())
     if match:
-        return match.group(1).upper()
+        code = match.group(1)
+        if len(code) % 2 != 0:
+            return None
+        return code.upper()
     return None
 
 

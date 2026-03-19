@@ -144,7 +144,6 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
 
     # --scan: scan BLE devices and match against pairing code
     if getattr(args, "scan", False):
-        from scanner import print_devices, scan_devices  # noqa: PLC0415
         code = parse_pairing_code(qr_data) or ""
         scan_timeout = getattr(args, "scan_timeout", 10.0)
         print(f"\nScanning for BLE devices ({scan_timeout:.0f}s)…")
@@ -170,7 +169,6 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
         if not address:
             # Try to find device by pairing code
             if not getattr(args, "scan", False):
-                from scanner import scan_devices  # noqa: PLC0415
                 scan_timeout = getattr(args, "scan_timeout", 10.0)
                 print(f"\nScanning for BLE devices ({scan_timeout:.0f}s) to find match…")
                 devices = await scan_devices(timeout=scan_timeout)
