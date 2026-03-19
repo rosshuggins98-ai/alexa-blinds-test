@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}")
 
 
-def parse_mac_address(qr_data: str) -> Optional[str]:
+def parse_mac_address(qr_data: Optional[str]) -> Optional[str]:
     """
     Extract a BLE MAC address from raw QR code data.
 
