@@ -173,6 +173,37 @@ class TestDecodeQr:
 
         assert decode_qr(degraded) == "AA:BB:CC:DD:EE:FF"
 
+    def test_defocus_blur_with_shadow(self):
+        """Defocus blur + uneven shadow + tight quiet zone — real camera photo."""
+        import cv2
+
+        np.random.seed(42)
+        qr = self._make_qr(size=350)
+        canvas = np.full((366, 366, 3), 200, dtype=np.uint8)
+        qr_c = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR)
+        canvas[8:358, 8:358] = qr_c
+
+        # Disc-shaped defocus blur (realistic camera out-of-focus)
+        k = 25
+        kern = np.zeros((k, k), dtype=np.float32)
+        cv2.circle(kern, (k // 2, k // 2), k // 2, 1, -1)
+        kern /= kern.sum()
+        blurred = cv2.filter2D(canvas, -1, kern)
+
+        # Uneven lighting
+        rows, cols = blurred.shape[:2]
+        for y in range(rows):
+            for x in range(cols):
+                factor = 1.3 - 0.6 * (x / cols) - 0.15 * (1 - y / rows)
+                blurred[y, x] = np.clip(
+                    blurred[y, x].astype(np.float32) * factor, 0, 255,
+                ).astype(np.uint8)
+
+        noise = np.random.normal(0, 8, blurred.shape).astype(np.int16)
+        noisy = np.clip(blurred.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+        assert decode_qr(noisy) == "AA:BB:CC:DD:EE:FF"
+
     def test_blank_image_returns_none(self):
         """A completely blank image should return None."""
         blank = np.zeros((200, 200, 3), dtype=np.uint8)

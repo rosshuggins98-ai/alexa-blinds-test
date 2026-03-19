@@ -21,6 +21,9 @@ from pyzbar.pyzbar import decode as pyzbar_decode
 
 logger = logging.getLogger(__name__)
 
+# WeChatQRCode is available in opencv-contrib but not in plain opencv.
+_HAS_WECHAT_QR = hasattr(cv2, "wechat_qrcode")
+
 # Regex pattern for BLE MAC addresses (e.g. AA:BB:CC:DD:EE:FF)
 _MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}")
 
@@ -52,6 +55,14 @@ def parse_mac_address(qr_data: Optional[str]) -> Optional[str]:
 # Image preprocessing strategies
 # ---------------------------------------------------------------------------
 
+def _add_quiet_zone(img: np.ndarray, pad: int = 40) -> np.ndarray:
+    """Add a white border around the image to ensure a QR quiet zone."""
+    value = 255 if len(img.shape) == 2 else (255, 255, 255)
+    return cv2.copyMakeBorder(
+        img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=value,
+    )
+
+
 def _preprocessing_variants(
     img: np.ndarray,
     *,
@@ -80,9 +91,29 @@ def _preprocessing_variants(
             51, 10,
         )
         variants.append(("adaptive_b51_c10", thresh))
+        variants.append(("adaptive_b51_c10_pad", _add_quiet_zone(thresh)))
         return variants
 
+    # ------------------------------------------------------------------
     # Full set for static images (e.g. photos loaded from file).
+    # ------------------------------------------------------------------
+
+    # Padded original / grayscale (fixes missing quiet zone)
+    variants.append(("original_pad", _add_quiet_zone(img)))
+    variants.append(("grayscale_pad", _add_quiet_zone(gray)))
+
+    # Downscaled variants — large phone photos (3000×4000) can confuse
+    # decoders; resizing to a moderate resolution often helps.
+    h, w = gray.shape[:2]
+    for target in (800, 1200):
+        if max(h, w) > target * 1.5:
+            scale = target / max(h, w)
+            small = cv2.resize(gray, None, fx=scale, fy=scale,
+                               interpolation=cv2.INTER_AREA)
+            variants.append((f"downscale_{target}", small))
+            variants.append((f"downscale_{target}_pad",
+                             _add_quiet_zone(small)))
+
     # Adaptive thresholding with various block sizes — the most
     # effective strategy for real-world photos with uneven lighting.
     for block_size in (31, 51, 101):
@@ -94,30 +125,141 @@ def _preprocessing_variants(
                 block_size, c_val,
             )
             variants.append((f"adaptive_b{block_size}_c{c_val}", thresh))
+            variants.append((f"adaptive_b{block_size}_c{c_val}_pad",
+                             _add_quiet_zone(thresh)))
 
     # CLAHE contrast enhancement
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
     variants.append(("clahe", enhanced))
+    variants.append(("clahe_pad", _add_quiet_zone(enhanced)))
 
     # Otsu binarisation
     _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     variants.append(("otsu", otsu))
+    variants.append(("otsu_pad", _add_quiet_zone(otsu)))
 
     # Sharpening
     kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
     sharpened = cv2.filter2D(gray, -1, kernel)
     variants.append(("sharpen", sharpened))
+    variants.append(("sharpen_pad", _add_quiet_zone(sharpened)))
+
+    # --- Additional strategies for severely degraded real-world photos ---
+
+    # Denoising (non-local means) — much better than simple blur
+    denoised = cv2.fastNlMeansDenoising(gray, h=12)
+    variants.append(("denoise", denoised))
+    variants.append(("denoise_pad", _add_quiet_zone(denoised)))
+    for block_size in (31, 51, 101):
+        dt = cv2.adaptiveThreshold(
+            denoised, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size, 10,
+        )
+        variants.append((f"denoise_adaptive_b{block_size}", dt))
+        variants.append((f"denoise_adaptive_b{block_size}_pad",
+                         _add_quiet_zone(dt)))
+
+    # Bilateral filter — edge-preserving smoothing
+    bilateral = cv2.bilateralFilter(gray, 11, 75, 75)
+    for block_size in (31, 51, 101):
+        bt = cv2.adaptiveThreshold(
+            bilateral, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size, 10,
+        )
+        variants.append((f"bilateral_adaptive_b{block_size}_pad",
+                         _add_quiet_zone(bt)))
+
+    # Morphological cleanup — close small gaps then remove speckles
+    morph_kernel = np.ones((3, 3), np.uint8)
+    for block_size in (31, 51, 101):
+        thresh = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size, 10,
+        )
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, morph_kernel)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, morph_kernel)
+        variants.append((f"morph_b{block_size}_pad", _add_quiet_zone(cleaned)))
+
+    # Gamma correction — recovers detail in shadowed areas
+    for gamma in (0.5, 0.7, 1.5):
+        table = np.array([
+            np.clip(((i / 255.0) ** gamma) * 255, 0, 255)
+            for i in range(256)
+        ], dtype=np.uint8)
+        corrected = cv2.LUT(gray, table)
+        variants.append((f"gamma_{gamma}", corrected))
+        variants.append((f"gamma_{gamma}_pad", _add_quiet_zone(corrected)))
+
+    # Upscaled variants — helps when QR modules are very small / blurry
+    scale = 2
+    up = cv2.resize(gray, None, fx=scale, fy=scale,
+                    interpolation=cv2.INTER_CUBIC)
+    variants.append(("upscale_2x", up))
+    variants.append(("upscale_2x_pad", _add_quiet_zone(up)))
+    for block_size in (51, 101):
+        ut = cv2.adaptiveThreshold(
+            up, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size, 10,
+        )
+        variants.append((f"upscale_adaptive_b{block_size}_pad",
+                         _add_quiet_zone(ut)))
+
+    # Combined: CLAHE → adaptive threshold → padding
+    for block_size in (51, 101):
+        ct = cv2.adaptiveThreshold(
+            enhanced, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size, 10,
+        )
+        variants.append((f"clahe_adaptive_b{block_size}_pad",
+                         _add_quiet_zone(ct)))
+
+    # Combined: denoise → CLAHE → adaptive threshold → padding
+    dn_enhanced = clahe.apply(denoised)
+    for block_size in (51, 101):
+        dct = cv2.adaptiveThreshold(
+            dn_enhanced, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size, 10,
+        )
+        variants.append((f"denoise_clahe_adaptive_b{block_size}_pad",
+                         _add_quiet_zone(dct)))
 
     return variants
 
 
 def _try_decode(img: np.ndarray) -> Optional[str]:
     """
-    Attempt to decode a QR code from *img* using both the OpenCV
-    detector and pyzbar.  Returns the decoded string or ``None``.
+    Attempt to decode a QR code from *img* using WeChatQRCode, pyzbar,
+    and the basic OpenCV detector (in order of robustness).
+    Returns the decoded string or ``None``.
     """
-    # --- pyzbar (generally more robust for real-world images) ---
+    # --- WeChatQRCode (most robust for real-world images) ---
+    if _HAS_WECHAT_QR:
+        try:
+            if len(img.shape) == 2:
+                detect_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            else:
+                detect_img = img
+            wechat = cv2.wechat_qrcode.WeChatQRCode()
+            results, _ = wechat.detectAndDecode(detect_img)
+            if results and results[0]:
+                return results[0]
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- pyzbar ---
     try:
         results = pyzbar_decode(img)
         if results:
