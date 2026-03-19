@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from qr_reader import decode_qr, parse_mac_address, read_qr_from_image
+from qr_reader import decode_qr, parse_mac_address, parse_pairing_code, read_qr_from_image
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +66,67 @@ class TestParseMacAddress:
 
 
 # ---------------------------------------------------------------------------
-# read_qr_from_image
+# parse_pairing_code
 # ---------------------------------------------------------------------------
+
+class TestParsePairingCode:
+    """Test pairing code extraction from QR code data."""
+
+    def test_plain_hex_code(self):
+        assert parse_pairing_code("BFC83FE0") == "BFC83FE0"
+
+    def test_lowercase_hex(self):
+        assert parse_pairing_code("bfc83fe0") == "BFC83FE0"
+
+    def test_mixed_case(self):
+        assert parse_pairing_code("BfC83fE0") == "BFC83FE0"
+
+    def test_short_4_char(self):
+        assert parse_pairing_code("ABCD") == "ABCD"
+
+    def test_longer_hex_code(self):
+        assert parse_pairing_code("1234567890AB") == "1234567890AB"
+
+    def test_none_returns_none(self):
+        assert parse_pairing_code(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert parse_pairing_code("") is None
+
+    def test_non_hex_returns_none(self):
+        assert parse_pairing_code("hello") is None
+
+    def test_odd_length_short_returns_none(self):
+        """Odd-length strings < 4 chars should not match."""
+        assert parse_pairing_code("ABC") is None
+
+    def test_mac_address_returns_none(self):
+        """If a MAC address is present, parse_pairing_code returns None."""
+        assert parse_pairing_code("AA:BB:CC:DD:EE:FF") is None
+
+    def test_mac_in_data_returns_none(self):
+        """Pairing code extractor defers to MAC extractor."""
+        assert parse_pairing_code("BLE:AA:BB:CC:DD:EE:FF") is None
+
+    def test_hex_with_surrounding_whitespace(self):
+        assert parse_pairing_code("  BFC83FE0  ") == "BFC83FE0"
+
+    def test_qr_decode_pairing_code_round_trip(self):
+        """Generate QR with pairing code and verify full round-trip."""
+        import cv2
+
+        encoder = cv2.QRCodeEncoder.create()
+        qr_img = encoder.encode("BFC83FE0")
+        qr_img = cv2.resize(qr_img, (400, 400), interpolation=cv2.INTER_NEAREST)
+
+        data = decode_qr(cv2.cvtColor(qr_img, cv2.COLOR_GRAY2BGR))
+        assert data == "BFC83FE0"
+
+        mac = parse_mac_address(data)
+        assert mac is None
+
+        code = parse_pairing_code(data)
+        assert code == "BFC83FE0"
 
 class TestReadQrFromImage:
     """Test QR code reading from image files."""

@@ -7,7 +7,7 @@ Usage:
     python cli.py list-services <address>
     python cli.py listen <address>
     python cli.py send <address> <char-uuid> <hex-data>
-    python cli.py qr-scan [--image <path>] [--timeout <seconds>] [--connect]
+    python cli.py qr-scan [--image <path>] [--timeout <seconds>] [--scan] [--connect]
 
 Examples:
     python cli.py scan
@@ -18,6 +18,7 @@ Examples:
     python cli.py send AA:BB:CC:DD:EE:FF 0000fff1-0000-1000-8000-00805f9b34fb 01ff0a
     python cli.py qr-scan
     python cli.py qr-scan --image qr_photo.jpg
+    python cli.py qr-scan --image qr_photo.jpg --scan
     python cli.py qr-scan --image qr_photo.jpg --connect
 """
 
@@ -27,7 +28,7 @@ import logging
 import sys
 
 from client import BlindsClient
-from qr_reader import parse_mac_address, read_qr_from_camera, read_qr_from_image
+from qr_reader import parse_mac_address, parse_pairing_code, read_qr_from_camera, read_qr_from_image
 from scanner import print_devices, scan_devices
 
 
@@ -118,7 +119,7 @@ async def cmd_send(args: argparse.Namespace) -> None:
 
 
 async def cmd_qr_scan(args: argparse.Namespace) -> None:
-    """Read a QR code from camera or image file and extract the device MAC."""
+    """Read a QR code from camera or image file and extract device info."""
     if args.image:
         qr_data = read_qr_from_image(args.image)
     else:
@@ -128,20 +129,71 @@ async def cmd_qr_scan(args: argparse.Namespace) -> None:
         print("No QR code detected.", file=sys.stderr)
         sys.exit(1)
 
-    mac = parse_mac_address(qr_data)
     print(f"QR data : {qr_data}")
+
+    mac = parse_mac_address(qr_data)
     if mac:
         print(f"Device MAC: {mac}")
     else:
-        print("No MAC address found in QR data.", file=sys.stderr)
-        sys.exit(1)
+        code = parse_pairing_code(qr_data)
+        if code:
+            print(f"Pairing code: {code}")
+        else:
+            print("No MAC address or pairing code found in QR data.", file=sys.stderr)
+            sys.exit(1)
 
+    # --scan: scan BLE devices and match against pairing code
+    if getattr(args, "scan", False):
+        from scanner import print_devices, scan_devices  # noqa: PLC0415
+        code = parse_pairing_code(qr_data) or ""
+        scan_timeout = getattr(args, "scan_timeout", 10.0)
+        print(f"\nScanning for BLE devices ({scan_timeout:.0f}s)…")
+        devices = await scan_devices(timeout=scan_timeout)
+        print_devices(devices)
+        if code:
+            code_upper = code.upper()
+            matches = [
+                d for d in devices
+                if code_upper in (d.name or "").upper()
+                or code_upper in d.address.upper().replace(":", "").replace("-", "")
+            ]
+            if matches:
+                print(f"✓ Found {len(matches)} device(s) matching pairing code {code}:")
+                for d in matches:
+                    print(f"  → {d.name or '(unknown)'}  {d.address}")
+            else:
+                print(f"No devices found matching pairing code {code}.")
+
+    # --connect: connect to the device (by MAC or first matching device)
     if args.connect:
-        print(f"\nConnecting to {mac}…")
-        client = BlindsClient(mac)
+        address = mac
+        if not address:
+            # Try to find device by pairing code
+            if not getattr(args, "scan", False):
+                from scanner import scan_devices  # noqa: PLC0415
+                scan_timeout = getattr(args, "scan_timeout", 10.0)
+                print(f"\nScanning for BLE devices ({scan_timeout:.0f}s) to find match…")
+                devices = await scan_devices(timeout=scan_timeout)
+            code = parse_pairing_code(qr_data) or ""
+            if code:
+                code_upper = code.upper()
+                matches = [
+                    d for d in devices
+                    if code_upper in (d.name or "").upper()
+                    or code_upper in d.address.upper().replace(":", "").replace("-", "")
+                ]
+                if matches:
+                    address = matches[0].address
+                    print(f"Matched pairing code to: {matches[0].name or address}")
+            if not address:
+                print("[ERROR] Could not find a device to connect to.", file=sys.stderr)
+                sys.exit(1)
+
+        print(f"\nConnecting to {address}…")
+        client = BlindsClient(address)
         try:
             await client.connect()
-            print(f"Successfully connected to {mac}.")
+            print(f"Successfully connected to {address}.")
         except Exception as exc:
             print(f"[ERROR] Could not connect: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -220,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     # qr-scan
     p_qr = subparsers.add_parser(
         "qr-scan",
-        help="Read the QR code on a blind to find its BLE MAC address.",
+        help="Read the QR code on a blind to find its BLE address or pairing code.",
     )
     p_qr.add_argument(
         "--image",
@@ -234,6 +286,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=30.0,
         metavar="SECONDS",
         help="Camera scan timeout in seconds (default: 30, ignored with --image).",
+    )
+    p_qr.add_argument(
+        "--scan",
+        action="store_true",
+        help="Scan for BLE devices and match against the QR pairing code.",
+    )
+    p_qr.add_argument(
+        "--scan-timeout",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        dest="scan_timeout",
+        help="BLE scan timeout in seconds (default: 10, requires --scan or --connect).",
     )
     p_qr.add_argument(
         "--connect",

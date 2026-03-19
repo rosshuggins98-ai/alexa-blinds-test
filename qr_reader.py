@@ -27,6 +27,10 @@ _HAS_WECHAT_QR = hasattr(cv2, "wechat_qrcode")
 # Regex pattern for BLE MAC addresses (e.g. AA:BB:CC:DD:EE:FF)
 _MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}")
 
+# Regex pattern for hex pairing codes (e.g. BFC83FE0).
+# Matches a standalone 4-16 character hex string (even length only).
+_PAIRING_CODE_RE = re.compile(r"\b([0-9A-Fa-f]{4}(?:[0-9A-Fa-f]{2})*)\b")
+
 # Pre-computed gamma lookup tables (avoids recalculating on every call).
 _GAMMA_TABLES: dict[float, np.ndarray] = {}
 for _g in (0.5, 0.7, 1.5):
@@ -55,6 +59,34 @@ def parse_mac_address(qr_data: Optional[str]) -> Optional[str]:
     if match:
         mac = match.group(0).upper().replace("-", ":")
         return mac
+    return None
+
+
+def parse_pairing_code(qr_data: Optional[str]) -> Optional[str]:
+    """
+    Extract a hex pairing code from raw QR code data.
+
+    Tuiss SmartView blinds use a QR code in the battery compartment
+    that encodes a hex pairing code (e.g. ``BFC83FE0``) rather than a
+    full MAC address.  This code can be matched against BLE device
+    names or advertisement data to identify the correct blind.
+
+    Args:
+        qr_data: Raw decoded QR string.
+
+    Returns:
+        Upper-cased hex pairing code (4–16 hex chars, even length),
+        or ``None`` if no valid code is found.
+    """
+    if not qr_data:
+        return None
+    # Don't match if a full MAC address is present — caller should
+    # prefer parse_mac_address() in that case.
+    if _MAC_RE.search(qr_data):
+        return None
+    match = _PAIRING_CODE_RE.search(qr_data.strip())
+    if match:
+        return match.group(1).upper()
     return None
 
 
@@ -238,6 +270,22 @@ def _preprocessing_variants(
         )
         variants.append((f"denoise_clahe_adaptive_b{block_size}_pad",
                          _add_quiet_zone(dct)))
+
+    # Richardson-Lucy deconvolution — reverses disc-shaped defocus blur
+    # that is common in phone photos.  Try several assumed blur radii.
+    for deconv_k in (9, 15, 21):
+        dk = np.zeros((deconv_k, deconv_k), dtype=np.float32)
+        cv2.circle(dk, (deconv_k // 2, deconv_k // 2), deconv_k // 2, 1, -1)
+        dk /= dk.sum()
+        deconv = gray.astype(np.float64) / 255.0
+        for _ in range(15):
+            conv = cv2.filter2D(deconv, -1, dk)
+            ratio = gray.astype(np.float64) / 255.0 / (conv + 1e-10)
+            correction = cv2.filter2D(ratio, -1, dk[::-1, ::-1])
+            deconv = np.clip(deconv * correction, 0, 1)
+        deconv_u8 = (deconv * 255).astype(np.uint8)
+        variants.append((f"deconv_k{deconv_k}", deconv_u8))
+        variants.append((f"deconv_k{deconv_k}_pad", _add_quiet_zone(deconv_u8)))
 
     return variants
 

@@ -22,7 +22,7 @@ from typing import Optional
 from bleak.backends.device import BLEDevice
 
 from client import BlindsClient
-from qr_reader import parse_mac_address, read_qr_from_camera, read_qr_from_image
+from qr_reader import parse_mac_address, parse_pairing_code, read_qr_from_camera, read_qr_from_image
 from scanner import scan_devices
 
 logger = logging.getLogger(__name__)
@@ -216,6 +216,7 @@ class ScanTab(ttk.Frame):
         super().__init__(parent, padding=8)
         self._app = app
         self._qr_mac: Optional[str] = None
+        self._qr_pairing_code: Optional[str] = None
         self._build()
 
     def _build(self) -> None:
@@ -329,14 +330,27 @@ class ScanTab(ttk.Frame):
         mac = parse_mac_address(data)
         if mac:
             self._qr_mac = mac
+            self._qr_pairing_code = None
             self._qr_status_var.set(f"✓ Device MAC: {mac}")
             self._app.set_status(f"QR scan successful — device MAC: {mac}")
-            # Auto-select the matching device if already scanned
             self._auto_select_qr_device()
-        else:
+            return
+
+        code = parse_pairing_code(data)
+        if code:
             self._qr_mac = None
-            self._qr_status_var.set(f"QR data: {data}  (no MAC address found)")
-            self._app.set_status(f"QR code read but no MAC address found: {data}")
+            self._qr_pairing_code = code
+            self._qr_status_var.set(
+                f"✓ Pairing code: {code}  — scan BLE devices to find your blind")
+            self._app.set_status(f"QR scan successful — pairing code: {code}")
+            self._auto_select_by_pairing_code()
+            return
+
+        # Fallback — show whatever we got
+        self._qr_mac = None
+        self._qr_pairing_code = None
+        self._qr_status_var.set(f"QR data: {data}  (no MAC or pairing code found)")
+        self._app.set_status(f"QR code read but no MAC or pairing code found: {data}")
 
     def _on_qr_error(self, exc: Exception) -> None:
         self._btn_qr_camera.config(state=tk.NORMAL)
@@ -358,6 +372,42 @@ class ScanTab(ttk.Frame):
                 self._app.set_status(
                     f"Auto-selected device matching QR code: {device.name or device.address}")
                 return
+
+    def _auto_select_by_pairing_code(self) -> None:
+        """If a QR pairing code was scanned, try to find a matching device.
+
+        Checks both device names and MAC addresses for the pairing code
+        substring (case-insensitive).  Tags matching rows in the tree.
+        """
+        if not self._qr_pairing_code:
+            return
+        code_upper = self._qr_pairing_code.upper()
+        matches: list[BLEDevice] = []
+        for device in self._app._scanned_devices:
+            name = (device.name or "").upper()
+            addr = device.address.upper().replace(":", "").replace("-", "")
+            if code_upper in name or code_upper in addr:
+                matches.append(device)
+                # Highlight the matching row with a tag
+                try:
+                    self._tree.item(device.address, tags=("qr_match",))
+                except tk.TclError:
+                    pass
+
+        if matches:
+            self._tree.tag_configure("qr_match", background="#d4edda")
+            first = matches[0]
+            self._tree.selection_set(first.address)
+            self._tree.see(first.address)
+            self._app._select_device(first)
+            self._app.set_status(
+                f"Found {len(matches)} device(s) matching pairing code "
+                f"{self._qr_pairing_code}: {first.name or first.address}")
+        else:
+            if self._app._scanned_devices:
+                self._app.set_status(
+                    f"No device found matching pairing code "
+                    f"{self._qr_pairing_code} — try scanning again")
 
     # -- BLE scanning ------------------------------------------------
 
@@ -395,8 +445,9 @@ class ScanTab(ttk.Frame):
         self._btn_scan.config(state=tk.NORMAL, text="▶  Scan")
         count = len(devices)
         self._app.set_status(f"Scan complete — {count} device(s) found.")
-        # If a QR MAC was previously scanned, auto-select the matching device
+        # If a QR code was previously scanned, auto-select the matching device
         self._auto_select_qr_device()
+        self._auto_select_by_pairing_code()
 
     def _scan_error(self, exc: Exception) -> None:
         self._btn_scan.config(state=tk.NORMAL, text="▶  Scan")
